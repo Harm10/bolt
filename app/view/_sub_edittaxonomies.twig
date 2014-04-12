@@ -37,7 +37,7 @@
 
                 // load all tags
                 $.ajax({
-                    url: "/async/tags/{{taxonomy.slug}}",
+                    url: "{{ paths.root }}async/tags/{{taxonomy.slug}}",
                     dataType: "json",
                     success: function(data) {
                         var results = [];
@@ -54,7 +54,7 @@
                 {% if taxonomy.tagcloud %}
                 // popular tags
                 $.ajax({
-                    url: "/async/populartags/{{taxonomy.slug}}",
+                    url: "{{ paths.root }}async/populartags/{{taxonomy.slug}}",
                     dataType: "json",
                     data : { limit: 40 },
                     success: function(data) {
@@ -104,6 +104,14 @@
             {% endfor %}
 
             </select>
+
+            {% if taxonomy.multiple is defined and taxonomy.multiple == 1 %}
+            <label><span class='left' style="line-height: 1px;">&nbsp;</span></label>
+            <div style="margin-top: -14px;">
+                <a href="#" class="btn bnt-info btn-mini" onclick="jQuery('#taxonomy-{{taxonomy.slug}} option').prop('selected', true); return false;">{{ __("Select all") }}</a>
+                <a href="#" class="btn bnt-info btn-mini" onclick="jQuery('#taxonomy-{{taxonomy.slug}} option').prop('selected', false); return false;">{{ __("Select none") }}</a>
+            </div>
+            {% endif %}
 
         {% endif %}
 

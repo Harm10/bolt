@@ -34,7 +34,7 @@ entries:
             type: html
             height: 300px
     relations:
-        entries:
+        pages:
           multiple: false
           order: title
           label: Select a page
@@ -42,6 +42,7 @@ entries:
     record_template: entry.twig
     listing_template: listing.twig
     listing_records: 10
+    default_status: publish
     sort: datepublish DESC
     recordsperpage: 10
 
@@ -107,6 +108,8 @@ kitchensink:
             type: geolocation
         image:
             type: image
+            attrib: title
+            extensions: [ gif, jpg, png ]
         imagelist:
             type: imagelist
         file:
@@ -144,18 +147,23 @@ kitchensink:
             values: [ A-tuin, Donatello, Rafael, Leonardo, Michelangelo, Koopa, Squirtle ]
             multiple: true
             postfix: "Select your favourite turtle(s)."
+        selectentry:
+            type: select
+            values: entries/id,title
+            postfix: "Select an entry"
     relations:
         entries:
             multiple: false
             label: Choose an entry
             order: -id
+            format: "{{ item.title|escape }} <span>(№ {{ item.id }})</span>"
         pages:
             multiple: true
             order: title
             label: Select zero or more pages
     taxonomy: [ categories, tags, chapters ]
     show_on_dashboard: true
-    default_status: draft
+    default_status: publish
     searchable: false
 
 
@@ -171,10 +179,12 @@ kitchensink:
 # video - varchar(256) - Video embed widget, stored as filename.
 # html - text (65kb) - wysiwyg element.
 # textarea - varchar(32768) - Simple, plain < textarea > field.
+# markdown - varchar(32768) - Simple, plain < textarea > field, which is parsed as Markdown text.
 # datetime - datetime - date and time selector widget.
 # date - datetime - date selector widget.
 # select - varchar(256) - select with predefined values
 # templateselect - varchar(256) - select with template filenames
+# checkbox - integer - checkbox-field which is 1 (checked) or 0 (unchecked)
 
 
 # number (deprecated) - input type decimal(18,9), useful for storing number that need to be sortable

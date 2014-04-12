@@ -80,6 +80,7 @@ class Backend implements ControllerProviderInterface
 
         $ctl->get("/content/{action}/{contenttypeslug}/{id}", array($this, 'contentaction'))
             ->before(array($this, 'before'))
+            ->method('POST')
             ->bind('contentaction');
 
         $ctl->get("/changelog/{contenttype}/{contentid}", array($this, 'changelogList'))
@@ -118,6 +119,7 @@ class Backend implements ControllerProviderInterface
 
         $ctl->get("/user/{action}/{id}", array($this, 'useraction'))
             ->before(array($this, 'before'))
+            ->method('POST')
             ->bind('useraction');
 
         $ctl->match("/files/{path}", array($this, 'files'))
@@ -189,8 +191,9 @@ class Backend implements ControllerProviderInterface
 
                 if ($result) {
                     $app['log']->add("Login " . $request->get('username'), 3, '', 'login');
-
-                    return redirect('dashboard');
+                    $retreat = $app['session']->get('retreat');
+                    $redirect = !empty($retreat) && is_array($retreat) ? $retreat : array('route' => 'dashboard', 'params' => array());
+                    return redirect($redirect['route'], $redirect['params']);
                 }
                 return $this->getLogin($app, $request);
 
@@ -207,7 +210,7 @@ class Backend implements ControllerProviderInterface
 
             default:
                 // Let's not disclose any internal information.
-                return abort(400, 'Invalid request');
+                return $app->abort(400, 'Invalid request');
         }
     }
 
@@ -440,9 +443,11 @@ class Backend implements ControllerProviderInterface
         );
 
         // @todo Do we need pager here?
-        $app['pager'] = $pager;
+        //$app['pager'] = $pager; // $pager is not defined, so no
 
-        $title = sprintf("<strong>%s</strong> » %s", __('Overview'), $contenttype['name']);
+        $title = sprintf("<strong>%s</strong> » %s",
+                    __('Overview'),
+                    htmlencode($contenttype['name']));
         $app['twig']->addGlobal('title', $title);
 
         return $app['render']->render(
@@ -578,7 +583,6 @@ class Backend implements ControllerProviderInterface
      */
     public function editcontent($contenttypeslug, $id, Silex\Application $app, Request $request)
     {
-
         // Make sure the user is allowed to see this page, based on 'allowed contenttypes'
         // for Editors.
         if (empty($id)) {
@@ -592,12 +596,21 @@ class Backend implements ControllerProviderInterface
             return redirect('dashboard');
         }
 
+        // set the editreferrer in twig if it was not set yet.
+        $tmpreferrer = getReferrer($app['request']);
+        if(strpos($tmpreferrer, '/overview/') !== false || ($tmpreferrer == $app['paths']['bolt']) )  {
+            $app['twig']->addGlobal('editreferrer', $tmpreferrer);
+        }
+
         $contenttype = $app['storage']->getContentType($contenttypeslug);
 
         if ($request->getMethod() == "POST") {
+            if (!checkToken()) {
+                $app->abort(400, __("Something went wrong"));
+            }
             if (!empty($id)) {
                 // Check if we're allowed to edit this content..
-                if (!$app['users']->isAllowed("contenttype:{$contenttype['slug']}:edit:{$content['id']}")) {
+                if (!$app['users']->isAllowed("contenttype:{$contenttype['slug']}:edit:$id")) {
                     $app['session']->getFlashBag()->set('error', __('You do not have the right privileges to edit that record.'));
 
                     return redirect('dashboard');
@@ -619,7 +632,6 @@ class Backend implements ControllerProviderInterface
                 $content = $app['storage']->getContentObject($contenttypeslug);
                 $oldStatus = '';
             }
-
 
             // To check whether the status is allowed, we act as if a status
             // *transition* were requested.
@@ -648,16 +660,20 @@ class Backend implements ControllerProviderInterface
                 if ($app['request']->get('returnto')) {
 
                     // We must 'return to' the edit page. In which case we must know the Id, so let's fetch it.
-                    if (empty($id)) {
-                        $id = $app['storage']->getLatestId($contenttype['slug']);
-                    }
+                    $id = $app['storage']->getLatestId($contenttype['slug']);
 
                     return redirect('editcontent', array('contenttypeslug' => $contenttype['slug'], 'id' => $id), "#".$app['request']->get('returnto'));
 
                 }
 
                 // No returnto, so we go back to the 'overview' for this contenttype.
-                return redirect('overview', array('contenttypeslug' => $contenttype['slug']));
+                // check if a pager was set in the referrer - if yes go back there
+                $editreferrer = $app['request']->get('editreferrer');
+                if($editreferrer) {
+                    return simpleredirect($editreferrer);
+                } else {
+                    return redirect('overview', array('contenttypeslug' => $contenttype['slug']));
+                }
 
             } else {
                 $app['session']->getFlashBag()->set('error', __('There was an error saving this %contenttype%.', array('%contenttype%' => $contenttype['singular_name'])));
@@ -679,7 +695,9 @@ class Backend implements ControllerProviderInterface
                 return redirect('dashboard');
             }
 
-            $title = sprintf("<strong>%s</strong> » %s", __('Edit %contenttype%', array('%contenttype%' => $contenttype['singular_name'])), $content->getTitle());
+            $title = sprintf("<strong>%s</strong> » %s",
+                __('Edit %contenttype%', array('%contenttype%' => $contenttype['singular_name'])),
+                htmlencode($content->getTitle()));
             $app['log']->add("Edit content", 1, $content, 'edit');
         } else {
             // Check if we're allowed to create content..
@@ -690,7 +708,6 @@ class Backend implements ControllerProviderInterface
             }
 
             $content = $app['storage']->getEmptyContent($contenttype['slug']);
-            $content['status'] = 'draft';
             $title = sprintf("<strong>%s</strong>", __('New %contenttype%', array('%contenttype%' => $contenttype['singular_name'])));
             $app['log']->add("New content", 1, $content, 'edit');
         }
@@ -764,6 +781,9 @@ class Backend implements ControllerProviderInterface
      */
     public function contentaction(Silex\Application $app, $action, $contenttypeslug, $id)
     {
+        if ($action === 'delete') {
+            return $this->deletecontent($app, $contenttypeslug, $id);
+        }
         $contenttype = $app['storage']->getContentType($contenttypeslug);
 
         $content = $app['storage']->getContent($contenttype['slug'] . "/" . $id);
@@ -788,7 +808,7 @@ class Backend implements ControllerProviderInterface
         }
 
         if ($app['storage']->updateSingleValue($contenttype['slug'], $id, 'status', $newStatus)) {
-            $app['session']->getFlashBag()->set('info', __("Content '%title%' has been changed to '$newStatus'", array('%title%' => $title)));
+            $app['session']->getFlashBag()->set('info', __("Content '%title%' has been changed to '%newStatus%'", array('%title%' => $title, '%newStatus%' => $newStatus)));
         } else {
             $app['session']->getFlashBag()->set('info', __("Content '%title%' could not be modified.", array('%title%' => $title)));
         }
@@ -835,11 +855,10 @@ class Backend implements ControllerProviderInterface
 
     public function useredit($id, \Bolt\Application $app, Request $request)
     {
-
         // Get the user we want to edit (if any)
         if (!empty($id)) {
             $user = $app['users']->getUser($id);
-            $title = "<strong>" . __('Edit user') . "</strong> » " . $user['displayname'];
+            $title = "<strong>" . __('Edit user') . "</strong> » " . htmlencode($user['displayname']);
         } else {
             $user = $app['users']->getEmptyUser();
             $title = "<strong>" . __('Create a new user') . "</strong>";
@@ -852,7 +871,7 @@ class Backend implements ControllerProviderInterface
         $contenttypes = makeValuepairs($app['config']->get('contenttypes'), 'slug', 'name');
         $allRoles = $app['permissions']->getDefinedRoles($app);
         $roles = array();
-        $userRoles = $user['roles'];
+        $userRoles = isset($user['roles']) ? $user['roles'] : array();
         foreach ($allRoles as $roleName => $role) {
             $roles[$roleName] = $role['label'];
         }
@@ -924,7 +943,7 @@ class Backend implements ControllerProviderInterface
         }
 
         // Make sure the passwords are identical and some other check, with a custom validator..
-        $form->addEventListener(FormEvents::POST_BIND, function (FormEvent $event) use ($app) {
+        $form->addEventListener(FormEvents::POST_SUBMIT, function (FormEvent $event) use ($app) {
 
             $form = $event->getForm();
             $id = $form['id']->getData();
@@ -970,7 +989,7 @@ class Backend implements ControllerProviderInterface
         // Check if the form was POST-ed, and valid. If so, store the user.
         if ($request->getMethod() == "POST") {
             //$form->bindRequest($request);
-            $form->bind($app['request']->get($form->getName()));
+            $form->submit($app['request']->get($form->getName()));
 
             if ($form->isValid()) {
 
@@ -988,7 +1007,12 @@ class Backend implements ControllerProviderInterface
                     $app['session']->getFlashBag()->set('error', __('User %s could not be saved, or nothing was changed.', array('%s' => $user['displayname'])));
                 }
 
-                return redirect('users');
+                if ($firstuser) {
+                    // To the dashboard, where 'login' will be triggered..
+                    return redirect('dashboard');
+                } else {
+                    return redirect('users');
+                }
 
             }
         }
@@ -1005,7 +1029,10 @@ class Backend implements ControllerProviderInterface
      */
     public function useraction(Silex\Application $app, $action, $id)
     {
-
+        if (!checkToken()) {
+            $app['session']->getFlashBag()->set('info', __("An error occurred."));
+            return redirect('users');
+        }
         $user = $app['users']->getUser($id);
 
         if (!$user) {
@@ -1079,13 +1106,17 @@ class Backend implements ControllerProviderInterface
 
     public function files($path, Silex\Application $app, Request $request)
     {
-
         $files = array();
         $folders = array();
 
-        $basefolder = __DIR__ . "/../../../../";
+        $basefolder = BOLT_WEB_DIR . "/";
         $path = stripTrailingSlash(str_replace("..", "", $path));
         $currentfolder = realpath($basefolder . $path);
+
+        if (! $app['filepermissions']->authorized($currentfolder)) {
+            $error = __("Display the file or directory '%s' is forbidden.", array('%s' => $path));
+            $app->abort(403, $error);
+        }
 
         if (is_writable($currentfolder)) {
 
@@ -1100,14 +1131,26 @@ class Backend implements ControllerProviderInterface
                 $form->bind($request);
                 if ($form->isValid()) {
                     $files = $request->files->get($form->getName());
-                    /* Make sure that Upload Directory is properly configured and writable */
-                    $filename = $files['FileUpload']->getClientOriginalName();
-                    $files['FileUpload']->move($currentfolder, $filename);
-                    echo "path: $path";
-                    $app['session']->getFlashBag()->set('info', __("File '%file%' was uploaded successfully.", array('%file%' => $filename)));
+                    // clean up and validate filename
+                    $originalFilename = $files['FileUpload']->getClientOriginalName();
+                    $filename = preg_replace('/[^a-zA-Z0-9_\\.]/', '_', basename($originalFilename));
+                    if ($app['filepermissions']->allowedUpload($filename)) {
+                        $files['FileUpload']->move($currentfolder, $filename);
+                        $app['session']->getFlashBag()->set('info', __("File '%file%' was uploaded successfully.", array('%file%' => $filename)));
 
-                    // Add the file to our stack..
-                    $app['stack']->add($path . "/" . $filename);
+                        // Add the file to our stack..
+                        $app['stack']->add($path . "/" . $filename);
+                    }
+                    else {
+                        $extensionList = array();
+                        foreach ($app['filepermissions']->getAllowedUploadExtensions() as $extension) {
+                            $extensionList[] = '<code>.' . htmlspecialchars($extension, ENT_QUOTES) . '</code>';
+                        }
+                        $extensionList = implode(' ', $extensionList);
+                        $app['session']->getFlashBag()->set('error',
+                            __("File '%file%' could not be uploaded (wrong/disallowed file type). Make sure the file extension is one of the following: ", array('%file%' => $filename))
+                            . $extensionList);
+                    }
                 } else {
                     $app['session']->getFlashBag()->set('error', __("File '%file%' could not be uploaded.", array('%file%' => $filename)));
                 }
@@ -1145,6 +1188,10 @@ class Backend implements ControllerProviderInterface
                 }
 
                 $fullfilename = $currentfolder . "/" . $entry;
+
+                if (! $app['filepermissions']->authorized(realpath($fullfilename))) {
+                    continue;
+                }
 
                 if (is_file($fullfilename)) {
                     $files[$entry] = array(
@@ -1216,7 +1263,12 @@ class Backend implements ControllerProviderInterface
             $filename = realpath(BOLT_CONFIG_DIR . "/" . basename($file));
         } else {
             // otherwise just realpath it, relative to the 'webroot'.
-            $filename = realpath(__DIR__ . "/../../../../" . $file);
+            $filename = realpath(BOLT_WEB_DIR . "/" . $file);
+        }
+
+        if (! $app['filepermissions']->authorized($filename)) {
+            $error = __("Edit the file '%s' is forbidden.", array('%s' => $file));
+            $app->abort(403, $error);
         }
 
         $type = getExtension($filename);

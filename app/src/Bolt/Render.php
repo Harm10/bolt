@@ -101,12 +101,25 @@ class Render
      */
     public function fetchCachedRequest()
     {
+        $result = null;
         if ($this->checkCacheConditions('request', true)) {
-            $key = md5($this->app['request']->getPathInfo());
+            $key = md5($this->app['request']->getPathInfo() . $this->app['request']->getQueryString());
 
-            return $this->app['cache']->fetch($key);
+            $result = $this->app['cache']->fetch($key);
 
+            // If we have a result, prepare a Response.
+            if (!empty($result)) {
+                // Note that we set the cache-control header to _half_ the maximum duration,
+                // otherwise a proxy/cache might keep the cache twice as long in the worst case
+                // scenario, and now it's only 50% max, but likely less
+                $headers = array(
+                    'Cache-Control' => 's-maxage=' . ($this->cacheDuration()/2),
+                );
+                $result = new Response($result, 200, $headers);
+            }
         }
+
+        return $result;
     }
 
     /**
@@ -140,7 +153,7 @@ class Render
 
             // This is where the magic happens.. We also store it with an empty 'template' name,
             // So we can later fetch it by its request..
-            $key = md5($this->app['request']->getPathInfo());
+            $key = md5($this->app['request']->getPathInfo() . $this->app['request']->getQueryString());
             $this->app['cache']->save($key, $html, $this->cacheDuration());
 
         }
@@ -158,7 +171,7 @@ class Render
         $duration = $this->app['config']->get('general/caching/duration', 10);
 
         // in seconds.
-        return $duration * 60;
+        return intval($duration) * 60;
 
     }
 

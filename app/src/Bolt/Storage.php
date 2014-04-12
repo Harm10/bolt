@@ -174,7 +174,7 @@ class Storage
                 case 'image':
                     // Get a random image..
                     if (!empty($this->images)) {
-                        $content[$field] = $this->images[array_rand($this->images)];
+                        $content[$field]['file'] = $this->images[array_rand($this->images)];
                     }
                     break;
                 case 'html':
@@ -200,7 +200,11 @@ class Storage
                     break;
                 case 'checkbox':
                     $content[$field] = rand(0,1);
+<<<<<<< HEAD
                     break;                
+=======
+                    break;
+>>>>>>> upstream/master
                 case 'float':
                 case 'number': // number is deprecated..
                 case 'integer':
@@ -611,8 +615,13 @@ class Storage
             }
 
             if ($values['type'] == "video") {
+                foreach (array('html', 'responsive') as $subkey) {
+                    if (!empty($fieldvalues[$key][$subkey])) {
+                        $fieldvalues[$key][$subkey] = (string)$fieldvalues[$key][$subkey];
+                    }
+                }
                 if (!empty($fieldvalues[$key]['url'])) {
-                    $fieldvalues[$key] = serialize($fieldvalues[$key]);
+                    $fieldvalues[$key] = json_encode($fieldvalues[$key]);
                 } else {
                     $fieldvalues[$key] = "";
                 }
@@ -620,15 +629,24 @@ class Storage
 
             if ($values['type'] == "geolocation") {
                 if (!empty($fieldvalues[$key]['address'])) {
-                    $fieldvalues[$key] = serialize($fieldvalues[$key]);
+                    $fieldvalues[$key] = json_encode($fieldvalues[$key]);
                 } else {
                     $fieldvalues[$key] = "";
                 }
             }
 
-            if (in_array($values['type'], array("imagelist", "filelist")))  {
+            if ($values['type'] == "image") {
+                 if (!empty($fieldvalues[$key]['file'])) {
+                     $fieldvalues[$key] = json_encode($fieldvalues[$key]);
+                 } else {
+                     $fieldvalues[$key] = "";
+                 }
+            }
 
-                if (!empty($fieldvalues[$key]) && strlen($fieldvalues[$key]) < 3) {
+            if (in_array($values['type'], array("imagelist", "filelist")))  {
+                if (is_array($fieldvalues[$key])) {
+                    $fieldvalues[$key] = json_encode($fieldvalues[$key]);
+                } else if (!empty($fieldvalues[$key]) && strlen($fieldvalues[$key]) < 3) {
                     // Don't store '[]'
                     $fieldvalues[$key] = "";
                 }
@@ -639,7 +657,7 @@ class Storage
             }
 
             if ($values['type'] == "select" && is_array($fieldvalues[$key])) {
-                $fieldvalues[$key] = serialize($fieldvalues[$key]);
+                $fieldvalues[$key] = json_encode($fieldvalues[$key]);
             }
 
         }
@@ -660,7 +678,7 @@ class Storage
         }
 
         // We need to verify if the slug is unique. If not, we update it.
-        $fieldvalues['slug'] = $this->getUri($fieldvalues['slug'], $fieldvalues['id'], $contenttype['slug'], false, false);
+        $fieldvalues['slug'] = $this->getUri($fieldvalues['slug'], isset($fieldvalues['id']) ? $fieldvalues['id'] : null, $contenttype['slug'], false, false);
 
         // Decide whether to insert a new record, or update an existing one.
         if (empty($fieldvalues['id'])) {
@@ -886,7 +904,7 @@ class Storage
         }
         // only add taxonomies if they exist
         if (!empty($taxonomies) && !empty($tags_where)) {
-            $tags_query_1 = sprintf('%s.contenttype = "%s"', $taxonomytable, $contenttype);
+            $tags_query_1 = sprintf("%s.contenttype = '%s'", $taxonomytable, $contenttype);
             $tags_query_2 = implode(' OR ', $tags_where);
             $tags_query   = sprintf(' OR (%s AND (%s))', $tags_query_1, $tags_query_2);
         }
@@ -904,7 +922,7 @@ class Storage
 
         // Build actual where
         $where = array();
-        $where[] = sprintf('%s.status = "published"', $table);
+        $where[] = sprintf("%s.status = 'published'", $table);
         $where[] = '(( ' . implode(' OR ', $fields_where) . ' ) '.$tags_query. ' )';
         $where = array_merge($where, $filter_where);
 
@@ -1120,11 +1138,10 @@ class Storage
                 $dboptions = $this->app['config']->getDBOptions();
                 $queryparams .= " ORDER BY " . $dboptions['randomfunction'];
             } else {
-                $order = safeString($parameters['order']);
-                if ($order[0] == "-") {
-                    $order = substr($order, 1) . " DESC";
+                $order = $this->getEscapedSortorder($parameters['order'], false);
+                if (!empty($order)) {
+                    $queryparams .= " ORDER BY " . $order;
                 }
-                $queryparams .= " ORDER BY " . $order;
             }
         }
 
@@ -1168,6 +1185,13 @@ class Storage
 
     /**
      * Retrieve content from the database, filtered on taxonomy.
+     *
+     * Note: we can NOT sort on anything meaningful. Records are fetched from multiple
+     * content-types, so we can not do joins. Neither can we sort after fetching,
+     * because it would mean fetching _all_ records and _then_ doing the sorting.
+     * Instead, we do not sort here. If you need ordering, use the '|order()' in
+     * your templates.
+     *
      */
     public function getContentByTaxonomy($taxonomyslug, $name, $parameters = "")
     {
@@ -1193,7 +1217,7 @@ class Storage
         $pagerquery = "SELECT COUNT(*) AS count FROM $tablename" . $where;
 
         // Add the limit
-        $query = "SELECT * FROM $tablename" . $where . " ORDER BY id DESC";
+        $query = "SELECT * FROM $tablename" . $where . " ORDER BY id ASC";
         $query = $this->app['db']->getDatabasePlatform()->modifyLimitQuery($query, $limit, ($page - 1) * $limit);
 
         $taxorows = $this->app['db']->fetchAll($query);
@@ -1320,9 +1344,10 @@ class Storage
     private function organizeQueryParameters($in_parameters = null)
     {
         $ctype_parameters = array();
+        $meta_parameters = array('order' => false); // order in meta_parameters check again in line: 1530!
         if (is_array($in_parameters)) {
             foreach ($in_parameters as $key => $value) {
-                if (in_array($key, array('page', 'limit', 'offset', 'returnsingle', 'printquery', 'paging'))) {
+                if (in_array($key, array('page', 'limit', 'offset', 'returnsingle', 'printquery', 'paging', 'order'))) {
                     $meta_parameters[$key] = $value;
                 } else {
                     $ctype_parameters[$key] = $value;
@@ -1340,7 +1365,7 @@ class Storage
         }
 
         // oof, part deux!
-        if (($meta_parameters['order'] == false) && ($this->app->raw('request') instanceof Request)) {
+        if ((isset($meta_parameters['order']) && $meta_parameters['order'] == false) && ($this->app->raw('request') instanceof Request)) {
             $meta_parameters['order'] = $this->app['request']->get('order', false);
         }
 
@@ -1450,10 +1475,6 @@ class Storage
             if (!isset($meta_parameters['limit'])) {
                 $meta_parameters['limit'] = $match[2];
             }
-        } elseif (($searched_contenttype = $this->searchSingularContentTypeSlug($textquery)) !== false) {
-            // like 'page'
-            $decoded['contenttypes'] = array($searched_contenttype);
-            $decoded['return_single'] = true;
         } else {
             $decoded['contenttypes'] = $this->decodeContentTypesFromText($textquery);
 
@@ -1473,14 +1494,6 @@ class Storage
             unset($meta_parameters['returnsingle']);
         }
 
-        /*
-        echo '<pre>parseTextQuery:';
-        echo '<strong>'.$textquery.'</strong><br/>';
-        //var_dump($decoded);
-        var_dump($meta_parameters);
-        var_dump($ctype_parameters);
-        echo '</pre><hr/>';
-        //*/
     }
 
     /**
@@ -1526,7 +1539,7 @@ class Storage
             $decoded['self_paginated'] = false;
         }
 
-        if ($meta_parameters['order'] === false) {
+        if (isset($meta_parameters['order']) && $meta_parameters['order'] === false) {
             if (count($decoded['contenttypes']) == 1) {
                 if ($this->getContentTypeGrouping($decoded['contenttypes'][0])) {
                     $decoded['order_callback'] = array($this, 'groupingSort');
@@ -1602,12 +1615,6 @@ class Storage
             'parameters' => array(),
             'hydrate' => true,
         );
-        /*
-        echo '<pre>decodeContentQuery before:';
-        echo '<strong>'.$textquery.'</strong><br/>';
-        var_dump($in_parameters);
-        echo '</pre><hr/>';
-        //*/
 
         list($meta_parameters, $ctype_parameters) = $this->organizeQueryParameters($in_parameters);
 
@@ -1616,13 +1623,6 @@ class Storage
         $this->prepareDecodedQueryForUse($decoded, $meta_parameters, $ctype_parameters);
 
         $decoded['parameters'] = $meta_parameters;
-
-        /*
-        echo '<pre>decodeContentQuery after:';
-        echo '<strong>'.$textquery.'</strong><br/>';
-        var_dump($decoded['parameters']);
-        echo '</pre><hr/>';
-        //*/
 
         // for all the non-reserved parameters that are fields or taxonomies, we assume people want to do a 'where'
         foreach ($ctype_parameters as $contenttypeslug => $actual_parameters) {
@@ -1633,7 +1633,7 @@ class Storage
 
             // Set the 'order', if specified in the meta_parameters.
             if (!empty($meta_parameters['order'])) {
-                $order[] = $meta_parameters['order'];
+                $order[] = $this->getEscapedSortorder($meta_parameters['order'], false);
             }
 
             $query = array(
@@ -1742,7 +1742,10 @@ class Storage
                 $query['where'] = 'WHERE ( ' . implode(' AND ', $where) . ' )';
             }
             if (count($order) > 0) {
-                $query['order'] = 'ORDER BY ' . implode(', ', $order);
+                $order = implode(', ', $order);
+                if (!empty($order)) {
+                    $query['order'] = 'ORDER BY ' . $order;
+                }
             }
 
             $decoded['queries'][] = $query;
@@ -1786,7 +1789,7 @@ class Storage
     /**
      * Hydrate database rows into objects
      */
-    private function hydrateRows($contenttype, $rows)
+    private function hydrateRows($contenttype, $rows, $getTaxoAndRel = true)
     {
         // Make sure content is set, and all content has information about its contenttype
         $objects = array();
@@ -1794,9 +1797,11 @@ class Storage
             $objects[$row['id']] = $this->getContentObject($contenttype, $row);
         }
 
-        // Make sure all content has their taxonomies and relations
-        $this->getTaxonomy($objects);
-        $this->getRelation($objects);
+        if ($getTaxoAndRel) {
+            // Make sure all content has their taxonomies and relations
+            $this->getTaxonomy($objects);
+            $this->getRelation($objects);
+        }
 
         return $objects;
     }
@@ -1866,10 +1871,9 @@ class Storage
 
             $rows = $this->app['db']->fetchAll($statement, $query['params']);
 
+            // Convert the row 'arrays' into \Bolt\Content objects.
             // Only get the Taxonomies and Relations if we have to.
-            if ($decoded['hydrate']) {
-                $rows = $this->hydrateRows($query['contenttype'], $rows);
-            }
+            $rows = $this->hydrateRows($query['contenttype'], $rows, $decoded['hydrate']);
 
             if ($results === false) {
                 $results = $rows;
@@ -2028,7 +2032,14 @@ class Storage
     {
         list ($name, $asc) = $this->getSortOrder($name);
 
-        if ($prefix !== false) {
+        // If we don't have a name, we can't determine a sortorder.
+        if (empty($name)) {
+            return false;
+        }
+
+        if( strpos($name, 'RAND') !== false ) {
+            $order = $name;
+        } elseif ($prefix !== false) {
             $order = $this->app['db']->quoteIdentifier($prefix . '.' . $name);
         } else {
             $order = $this->app['db']->quoteIdentifier($name);
@@ -2051,6 +2062,11 @@ class Storage
      */
     public function getSortOrder($name)
     {
+        // If we don't get a string, we can't determine a sortorder.
+        if (!is_string($name)) {
+            return false;
+        }
+
         $parts = explode(' ', $name);
         $fieldname = $parts[0];
         $sort = 'ASC';
@@ -2295,8 +2311,16 @@ class Storage
     public function getTaxonomyTypeAssert($includesingular = false)
     {
 
+        $taxonomytypes = $this->app['config']->get('taxonomy');
+
+        // No taxonomies, nothing to assert. The route _DOES_ expect a string, so
+        // we return a regex that never matches.
+        if (empty($taxonomytypes)) {
+            return "$.";
+        }
+
         $slugs = array();
-        foreach ($this->app['config']->get('taxonomy') as $type) {
+        foreach ($taxonomytypes as $type) {
             $slugs[] = $type['slug'];
             if ($includesingular) {
                 $slugs[] = $type['singular_slug'];
@@ -2423,7 +2447,12 @@ class Storage
         // Get the contenttype from first $content
         $contenttype = $content[util::array_first_key($content)]->contenttype['slug'];
 
-        $taxonomytypes = array_keys($this->app['config']->get('taxonomy'));
+        $taxonomytypes = $this->app['config']->get('taxonomy');
+
+        // If there are no taxonomytypes, there won't be any results, so we return.
+        if (empty($taxonomytypes)) {
+            return;
+        }
 
         $query = sprintf(
             "SELECT * FROM %s WHERE content_id IN (?) AND contenttype=? AND taxonomytype IN (?)",
@@ -2431,7 +2460,7 @@ class Storage
         );
         $rows = $this->app['db']->executeQuery(
             $query,
-            array($ids, $contenttype, $taxonomytypes),
+            array($ids, $contenttype, array_keys($taxonomytypes)),
             array(DoctrineConn::PARAM_INT_ARRAY, \PDO::PARAM_STR, DoctrineConn::PARAM_STR_ARRAY)
         )->fetchAll();
 
